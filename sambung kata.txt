@@ -1,0 +1,245 @@
+--// ================= CONFIG PANEL =================
+local SUFFIX_PRIORITY = {"x","q","bt","if","ia","ks","iat"}
+--// =================================================
+
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+
+local parent = CoreGui
+
+if parent:FindFirstChild("WordSearchGUI") then
+    parent.WordSearchGUI:Destroy()
+end
+
+local gui = Instance.new("ScreenGui", parent)
+gui.Name = "WordSearchGUI"
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 170, 0, 220)
+frame.Position = UDim2.new(0.5, -85, 0.5, -110)
+frame.BackgroundColor3 = Color3.fromRGB(30,30,35)
+frame.Active = true
+
+-- DRAG
+local dragging, dragInput, dragStart, startPos
+frame.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPos = frame.Position
+        input.Changed:Connect(function()
+            if input.UserInputState == Enum.UserInputState.End then
+                dragging = false
+            end
+        end)
+    end
+end)
+
+frame.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        dragInput = input
+    end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+    if input == dragInput and dragging then
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(
+            startPos.X.Scale,
+            startPos.X.Offset + delta.X,
+            startPos.Y.Scale,
+            startPos.Y.Offset + delta.Y
+        )
+    end
+end)
+
+-- TITLE
+local title = Instance.new("TextLabel", frame)
+title.Size = UDim2.new(1,0,0,18)
+title.BackgroundColor3 = Color3.fromRGB(124,58,237)
+title.Text = "Finder"
+title.TextColor3 = Color3.new(1,1,1)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 10
+
+-- SEARCH BOX
+local searchBox = Instance.new("TextBox", frame)
+searchBox.Size = UDim2.new(1,-8,0,20)
+searchBox.Position = UDim2.new(0,4,0,22)
+searchBox.PlaceholderText = "awalan / a*if"
+searchBox.TextColor3 = Color3.new(1,1,1)
+searchBox.BackgroundColor3 = Color3.fromRGB(45,45,55)
+searchBox.Font = Enum.Font.Gotham
+searchBox.TextSize = 10
+
+-- RESET BUTTON
+local resetBtn = Instance.new("TextButton", frame)
+resetBtn.Size = UDim2.new(1,-8,0,18)
+resetBtn.Position = UDim2.new(0,4,0,44)
+resetBtn.BackgroundColor3 = Color3.fromRGB(220,38,38)
+resetBtn.Text = "Reset Mark"
+resetBtn.TextColor3 = Color3.new(1,1,1)
+resetBtn.Font = Enum.Font.GothamBold
+resetBtn.TextSize = 9
+
+-- RESULT LIST
+local list = Instance.new("ScrollingFrame", frame)
+list.Size = UDim2.new(1,-8,1,-66)
+list.Position = UDim2.new(0,4,0,64)
+list.CanvasSize = UDim2.new(0,0,0,0)
+list.ScrollBarThickness = 2
+list.BackgroundTransparency = 1
+
+local layout = Instance.new("UIListLayout", list)
+layout.Padding = UDim.new(0,1)
+
+-- DATABASE
+local words = {"aktif","adiktif","abjad","abah","abi","abadi","aqiq","aviv","anak","api","apel","ayam","ax","aq","av"}
+local usedWords = {}
+
+-- LOAD WORDLIST
+task.spawn(function()
+    local url = "https://raw.githubusercontent.com/rendays666/renrenscript/refs/heads/main/00-indonesian-wordlist.lst"
+    local ok, res = pcall(function() return game:HttpGet(url) end)
+    if ok and res then
+        local newWords = {}
+        for w in string.gmatch(res, "[^\r\n]+") do
+            w = string.lower(w)
+            if #w > 1 then
+                table.insert(newWords, w)
+            end
+        end
+        if #newWords > 1000 then
+            words = newWords
+        end
+    end
+end)
+
+local function wildcardToPattern(query)
+    query = string.lower(query)
+    query = string.gsub(query, "%*", ".*")
+    return "^" .. query
+end
+
+local function clear()
+    for _,v in pairs(list:GetChildren()) do
+        if v:IsA("Frame") then v:Destroy() end
+    end
+end
+
+local function createItem(word)
+    local container = Instance.new("Frame", list)
+    container.Size = UDim2.new(1,-2,0,16)
+    container.BackgroundColor3 = Color3.fromRGB(50,50,60)
+
+    local label = Instance.new("TextLabel", container)
+    label.Size = UDim2.new(1,-20,1,0)
+    label.BackgroundTransparency = 1
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Font = Enum.Font.GothamSemibold
+    label.TextSize = 9
+    label.TextColor3 = Color3.new(1,1,1)
+    label.Text = " "..word
+
+    local markBtn = Instance.new("TextButton", container)
+    markBtn.Size = UDim2.new(0,16,1,0)
+    markBtn.Position = UDim2.new(1,-16,0,0)
+    markBtn.Text = "✓"
+    markBtn.Font = Enum.Font.GothamBold
+    markBtn.TextSize = 9
+
+    local function updateVisual()
+        if usedWords[word] then
+            container.BackgroundColor3 = Color3.fromRGB(35,35,40)
+            label.TextColor3 = Color3.fromRGB(160,160,160)
+            markBtn.BackgroundColor3 = Color3.fromRGB(16,185,129)
+        else
+            container.BackgroundColor3 = Color3.fromRGB(50,50,60)
+            label.TextColor3 = Color3.new(1,1,1)
+            markBtn.BackgroundColor3 = Color3.fromRGB(70,70,80)
+        end
+    end
+
+    markBtn.MouseButton1Click:Connect(function()
+        usedWords[word] = not usedWords[word]
+        updateVisual()
+    end)
+
+    updateVisual()
+end
+
+local function sortByPriority(results)
+    local buckets = {}
+    for _,suffix in ipairs(SUFFIX_PRIORITY) do
+        buckets[suffix] = {}
+    end
+    local normal = {}
+
+    for _,word in ipairs(results) do
+        local matched = false
+        for _,suffix in ipairs(SUFFIX_PRIORITY) do
+            if word:sub(-#suffix) == suffix then
+                table.insert(buckets[suffix], word)
+                matched = true
+                break
+            end
+        end
+        if not matched then
+            table.insert(normal, word)
+        end
+    end
+
+    local final = {}
+    for _,suffix in ipairs(SUFFIX_PRIORITY) do
+        for _,w in ipairs(buckets[suffix]) do
+            table.insert(final, w)
+        end
+    end
+    for _,w in ipairs(normal) do
+        table.insert(final, w)
+    end
+
+    return final
+end
+
+local function searchWords(query)
+    clear()
+    if query == "" then return end
+
+    query = string.lower(query)
+    local results = {}
+
+    if string.find(query, "%*") then
+        local pattern = wildcardToPattern(query)
+        for _,word in ipairs(words) do
+            if string.match(word, pattern) then
+                table.insert(results, word)
+            end
+        end
+    else
+        for _,word in ipairs(words) do
+            if word:sub(1, #query) == query then
+                table.insert(results, word)
+            end
+        end
+        results = sortByPriority(results)
+    end
+
+    local count = 0
+    for _,word in ipairs(results) do
+        createItem(word)
+        count += 1
+        if count >= 100 then break end
+    end
+
+    list.CanvasSize = UDim2.new(0,0,0,count*17)
+end
+
+searchBox:GetPropertyChangedSignal("Text"):Connect(function()
+    searchWords(searchBox.Text)
+end)
+
+resetBtn.MouseButton1Click:Connect(function()
+    usedWords = {}
+    searchWords(searchBox.Text)
+end)
