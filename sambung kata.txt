@@ -1,5 +1,5 @@
 --// ================= CONFIG PANEL =================
-local SUFFIX_PRIORITY = {"x","q","bt","if","ia","ks","iat"}
+local SUFFIX_PRIORITY = {"x","q","ia","if","ks","iat"}
 --// =================================================
 
 local CoreGui = game:GetService("CoreGui")
@@ -242,4 +242,5 @@ end)
 resetBtn.MouseButton1Click:Connect(function()
     usedWords = {}
     searchWords(searchBox.Text)
+
 end)
