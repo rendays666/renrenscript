@@ -1,0 +1,472 @@
+--================= CONFIG =================
+local WORD_SOURCE = "https://raw.githubusercontent.com/geovedi/indonesian-wordlist/master/00-indonesian-wordlist.lst"
+local MAX_WORD_LENGTH = 12
+local TRY_DELAY = 0.5
+--==========================================
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local UserInputService = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+
+--================ CLEANUP =================
+
+if CoreGui:FindFirstChild("WordSolverGUI") then
+	CoreGui.WordSolverGUI:Destroy()
+end
+
+--================ GUI =================
+
+local gui = Instance.new("ScreenGui", CoreGui)
+gui.Name = "WordSolverGUI"
+gui.ResetOnSpawn = false
+
+local frame = Instance.new("Frame", gui)
+frame.Size = UDim2.new(0, 200, 0, 260)
+frame.Position = UDim2.new(0.5, -100, 0.5, -130)
+frame.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+frame.BorderSizePixel = 0
+frame.Active = true
+
+local corner = Instance.new("UICorner", frame)
+corner.CornerRadius = UDim.new(0, 8)
+
+--================ TITLE BAR =================
+
+local titleBar = Instance.new("Frame", frame)
+titleBar.Size = UDim2.new(1, 0, 0, 26)
+titleBar.BackgroundColor3 = Color3.fromRGB(124, 58, 237)
+titleBar.BorderSizePixel = 0
+titleBar.Active = true
+
+local titleCorner = Instance.new("UICorner", titleBar)
+titleCorner.CornerRadius = UDim.new(0, 8)
+
+-- Fix bottom corners of title bar
+local titleFix = Instance.new("Frame", titleBar)
+titleFix.Size = UDim2.new(1, 0, 0.5, 0)
+titleFix.Position = UDim2.new(0, 0, 0.5, 0)
+titleFix.BackgroundColor3 = Color3.fromRGB(124, 58, 237)
+titleFix.BorderSizePixel = 0
+
+local title = Instance.new("TextLabel", titleBar)
+title.Size = UDim2.new(1, -60, 1, 0)
+title.Position = UDim2.new(0, 8, 0, 0)
+title.BackgroundTransparency = 1
+title.Text = "Auto Puzzle Solver"
+title.TextColor3 = Color3.new(1, 1, 1)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 11
+title.TextXAlignment = Enum.TextXAlignment.Left
+
+--================ TOGGLE BUTTON =================
+
+local toggleBtn = Instance.new("TextButton", titleBar)
+toggleBtn.Size = UDim2.new(0, 50, 0, 18)
+toggleBtn.Position = UDim2.new(1, -56, 0.5, -9)
+toggleBtn.BackgroundColor3 = Color3.fromRGB(34, 197, 94)
+toggleBtn.Text = "ON"
+toggleBtn.TextColor3 = Color3.new(1, 1, 1)
+toggleBtn.Font = Enum.Font.GothamBold
+toggleBtn.TextSize = 10
+toggleBtn.BorderSizePixel = 0
+
+local toggleCorner = Instance.new("UICorner", toggleBtn)
+toggleCorner.CornerRadius = UDim.new(0, 4)
+
+--================ STATUS =================
+
+local statusLabel = Instance.new("TextLabel", frame)
+statusLabel.Size = UDim2.new(1, -8, 0, 44)
+statusLabel.Position = UDim2.new(0, 4, 0, 30)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Status: Idle"
+statusLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 9
+statusLabel.TextWrapped = true
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+--================ GAME STATUS =================
+
+local gameLabel = Instance.new("TextLabel", frame)
+gameLabel.Size = UDim2.new(1, -8, 0, 18)
+gameLabel.Position = UDim2.new(0, 4, 0, 76)
+gameLabel.BackgroundTransparency = 1
+gameLabel.Text = "Game: Menunggu..."
+gameLabel.TextColor3 = Color3.fromRGB(180, 180, 100)
+gameLabel.Font = Enum.Font.GothamBold
+gameLabel.TextSize = 9
+gameLabel.TextXAlignment = Enum.TextXAlignment.Left
+
+--================ DIVIDER =================
+
+local divider = Instance.new("Frame", frame)
+divider.Size = UDim2.new(1, -8, 0, 1)
+divider.Position = UDim2.new(0, 4, 0, 96)
+divider.BackgroundColor3 = Color3.fromRGB(60, 60, 70)
+divider.BorderSizePixel = 0
+
+--================ USED WORDS LABEL =================
+
+local usedTitle = Instance.new("TextLabel", frame)
+usedTitle.Size = UDim2.new(1, -8, 0, 14)
+usedTitle.Position = UDim2.new(0, 4, 0, 100)
+usedTitle.BackgroundTransparency = 1
+usedTitle.Text = "Kata yang pernah dicoba:"
+usedTitle.TextColor3 = Color3.fromRGB(150, 150, 170)
+usedTitle.Font = Enum.Font.GothamBold
+usedTitle.TextSize = 8
+usedTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+--================ SCROLL FRAME =================
+
+local scroll = Instance.new("ScrollingFrame", frame)
+scroll.Size = UDim2.new(1, -8, 0, 140)
+scroll.Position = UDim2.new(0, 4, 0, 116)
+scroll.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 3
+scroll.ScrollBarImageColor3 = Color3.fromRGB(124, 58, 237)
+scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+
+local scrollCorner = Instance.new("UICorner", scroll)
+scrollCorner.CornerRadius = UDim.new(0, 4)
+
+local scrollLayout = Instance.new("UIListLayout", scroll)
+scrollLayout.SortOrder = Enum.SortOrder.LayoutOrder
+scrollLayout.Padding = UDim.new(0, 1)
+
+--================ DRAG =================
+
+local dragging, dragInput, dragStart, startPos
+
+titleBar.InputBegan:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = true
+		dragStart = input.Position
+		startPos = frame.Position
+	end
+end)
+
+titleBar.InputEnded:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseButton1 then
+		dragging = false
+	end
+end)
+
+titleBar.InputChanged:Connect(function(input)
+	if input.UserInputType == Enum.UserInputType.MouseMovement then
+		dragInput = input
+	end
+end)
+
+UserInputService.InputChanged:Connect(function(input)
+	if input == dragInput and dragging then
+		local delta = input.Position - dragStart
+		frame.Position = UDim2.new(
+			startPos.X.Scale,
+			startPos.X.Offset + delta.X,
+			startPos.Y.Scale,
+			startPos.Y.Offset + delta.Y
+		)
+	end
+end)
+
+--================ VARIABLES =================
+
+local running = true
+local words = {}
+local lastPuzzle = ""
+local usedWords = {} -- { [word] = true } — reset setiap game baru
+local gameActive = false -- apakah GameGui sedang muncul
+
+--================ TOGGLE LOGIC =================
+
+toggleBtn.MouseButton1Click:Connect(function()
+	running = not running
+	if running then
+		toggleBtn.Text = "ON"
+		toggleBtn.BackgroundColor3 = Color3.fromRGB(34, 197, 94)
+		setStatus("Running")
+	else
+		toggleBtn.Text = "OFF"
+		toggleBtn.BackgroundColor3 = Color3.fromRGB(239, 68, 68)
+		setStatus("Paused")
+	end
+end)
+
+--================ STATUS HELPERS =================
+
+local function setStatus(t)
+	statusLabel.Text = "Status: " .. t
+end
+
+local function setGameStatus(t, color)
+	gameLabel.Text = "Game: " .. t
+	gameLabel.TextColor3 = color or Color3.fromRGB(180, 180, 100)
+end
+
+--================ USED WORD UI =================
+
+local function addUsedWordLabel(word, correct)
+	local lbl = Instance.new("TextLabel", scroll)
+	lbl.Size = UDim2.new(1, -4, 0, 14)
+	lbl.BackgroundTransparency = 1
+
+	if correct then
+		lbl.Text = "✓ " .. word
+		lbl.TextColor3 = Color3.fromRGB(34, 197, 94)
+		lbl.Font = Enum.Font.GothamBold
+	else
+		lbl.Text = "✗ " .. word
+		lbl.TextColor3 = Color3.fromRGB(150, 80, 80)
+		lbl.Font = Enum.Font.Gotham
+	end
+
+	lbl.TextSize = 8
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.LayoutOrder = #scroll:GetChildren()
+end
+
+local function clearUsedWords()
+	usedWords = {}
+	for _, child in ipairs(scroll:GetChildren()) do
+		if child:IsA("TextLabel") then
+			child:Destroy()
+		end
+	end
+end
+
+--================ LOAD DICTIONARY =================
+
+task.spawn(function()
+	setStatus("Loading dictionary...")
+
+	local ok, res = pcall(function()
+		return game:HttpGet(WORD_SOURCE)
+	end)
+
+	if ok then
+		for w in string.gmatch(res, "[^\r\n]+") do
+			w = string.lower(w)
+			if #w > 1 then
+				table.insert(words, w)
+			end
+		end
+	end
+
+	setStatus("Kamus dimuat: " .. #words .. " kata")
+end)
+
+--================ KEYBOARD SCAN =================
+
+local keyboard = {}
+local enterKey = nil
+
+local function scanKeyboard()
+	keyboard = {}
+	enterKey = nil
+
+	for _, v in pairs(player.PlayerGui:GetDescendants()) do
+		if v:IsA("TextButton") then
+			local t = string.upper(v.Text)
+			if #t == 1 then
+				keyboard[t] = v
+			end
+			if t == "ENTER" then
+				enterKey = v
+			end
+		end
+	end
+
+	setStatus("Keyboard ditemukan")
+end
+
+--================ TYPE =================
+
+local function typeWord(word)
+	for c in word:upper():gmatch(".") do
+		local key = keyboard[c]
+		if key then
+			firesignal(key.MouseButton1Click)
+		end
+	end
+
+	if enterKey then
+		firesignal(enterKey.MouseButton1Click)
+	end
+end
+
+--================ FEEDBACK =================
+
+local function isCorrect()
+	local label = player.PlayerGui:FindFirstChild("feedbacklabel", true)
+	if not label then return false end
+
+	local txt = string.lower(label.Text)
+	if string.find(txt, "benar") or string.find(txt, "correct") then
+		return true
+	end
+
+	return false
+end
+
+--================ GET PUZZLE =================
+
+local function getPuzzle()
+	local label = player.PlayerGui:FindFirstChild("PuzzleLabel", true)
+	if not label then return nil end
+
+	local text = label.Text
+	if not text then return nil end
+	if not string.find(text, "_") then return nil end
+
+	text = string.lower(text)
+	text = string.gsub(text, "%s", "")
+	text = string.gsub(text, "_", "*")
+
+	return text
+end
+
+--================ CONVERT =================
+
+local function convertPattern(t)
+	return "^" .. string.gsub(t, "%*", ".+") .. "$"
+end
+
+--================ SOLVER =================
+
+local function solve(pattern, puzzleText)
+	setStatus("Mencari kata...")
+
+	local results = {}
+
+	for _, w in ipairs(words) do
+		if #w <= MAX_WORD_LENGTH then
+			if string.match(w, pattern) then
+				-- skip jika sudah pernah dicoba di game ini
+				if not usedWords[w] then
+					table.insert(results, w)
+				end
+			end
+		end
+	end
+
+	table.sort(results, function(a, b)
+		return #a > #b
+	end)
+
+	setStatus("Ditemukan " .. #results .. " kata")
+
+	for _, word in ipairs(results) do
+		if not running then return end
+
+		-- cek puzzle masih sama
+		local current = getPuzzle()
+		if current ~= puzzleText then
+			setStatus("Puzzle berubah")
+			return
+		end
+
+		-- cek game masih aktif
+		if not gameActive then
+			setStatus("Game tidak aktif")
+			return
+		end
+
+		usedWords[word] = true
+		typeWord(word)
+
+		task.wait(TRY_DELAY)
+
+		if isCorrect() then
+			setStatus("✓ Benar: " .. word)
+			addUsedWordLabel(word, true)
+			return
+		else
+			addUsedWordLabel(word, false)
+		end
+	end
+
+	setStatus("Selesai mencoba")
+end
+
+--================ GAME DETECTION =================
+-- Monitor Players.<username>.PlayerGui.GameGui
+-- Muncul = game baru mulai
+-- Hilang = game selesai
+
+task.spawn(function()
+	-- Tunggu PlayerGui siap
+	local playerGui = player:WaitForChild("PlayerGui", 10)
+	if not playerGui then
+		setGameStatus("PlayerGui tidak ditemukan", Color3.fromRGB(239, 68, 68))
+		return
+	end
+
+	local function checkGameGui()
+		return playerGui:FindFirstChild("GameGui") ~= nil
+	end
+
+	local prevState = checkGameGui()
+	gameActive = prevState
+
+	if prevState then
+		setGameStatus("Aktif", Color3.fromRGB(34, 197, 94))
+		scanKeyboard()
+	else
+		setGameStatus("Menunggu game dimulai...", Color3.fromRGB(180, 180, 100))
+	end
+
+	while true do
+		task.wait(0.3)
+
+		local currentState = checkGameGui()
+
+		-- GameGui MUNCUL = game baru dimulai
+		if not prevState and currentState then
+			gameActive = true
+			clearUsedWords()
+			lastPuzzle = ""
+			setGameStatus("Game dimulai! (baru)", Color3.fromRGB(34, 197, 94))
+			setStatus("Game baru - scanning keyboard...")
+			task.wait(1) -- beri waktu UI load
+			scanKeyboard()
+
+		-- GameGui HILANG = game selesai
+		elseif prevState and not currentState then
+			gameActive = false
+			setGameStatus("Game selesai", Color3.fromRGB(239, 68, 68))
+			setStatus("Menunggu game berikutnya...")
+			-- TIDAK clear usedWords — biar tetap kelihatan kata yang sudah dipakai
+		end
+
+		prevState = currentState
+	end
+end)
+
+--================ MAIN LOOP =================
+
+task.spawn(function()
+	while true do
+		task.wait(0.2)
+
+		if not running then continue end
+		if not gameActive then continue end
+
+		local puzzle = getPuzzle()
+
+		if puzzle and puzzle ~= lastPuzzle then
+			lastPuzzle = puzzle
+			setStatus("Puzzle baru: " .. puzzle)
+
+			local pattern = convertPattern(puzzle)
+			solve(pattern, puzzle)
+
+			setStatus("Menunggu puzzle berikutnya...")
+		end
+	end
+end)
