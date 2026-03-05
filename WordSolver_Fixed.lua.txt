@@ -1,7 +1,7 @@
 --================= CONFIG =================
 local WORD_SOURCE = "https://raw.githubusercontent.com/geovedi/indonesian-wordlist/master/00-indonesian-wordlist.lst"
 local MAX_WORD_LENGTH = 12
-local TRY_DELAY = 0.5
+local TRY_DELAY = 0.1
 --==========================================
 
 local Players = game:GetService("Players")
