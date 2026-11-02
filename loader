@@ -1,27 +1,31 @@
 --[[
   ═══════════════════════════════════════════════════════════════════
-  RENRENHUB v3.0 — FINAL (auto-exec, no key, working tracking)
+  RENRENHUB v4.0 — FINAL
   ═══════════════════════════════════════════════════════════════════
-  • No key system — langsung load
-  • Auto-execute if map matches
-  • Auto-browse if map doesn't match
-  • Tracking ke /sessions/ + /executes/ (SAMA seperti v11 yang work)
-  • Music 3-state toggle
-  • Image resolver async untuk browser
+  ✓ NO key system, direct load
+  ✓ Auto-execute if map matches, auto-browse if not
+  ✓ Music 3-state toggle + playlist loop
+  ✓ Firebase: /sessions/ + /executes/ + /stats/byGame/
+  ✓ INCREMENT API (bandwidth-optimized)
+  ✓ Session heartbeat 90s (PATCH 30 bytes)
+  ✓ Cleanup: executes >7d, sessions stale >200s
+  ✓ Track MAP NAME (bukan script name)
+  ✓ Image resolver async di browser
   ═══════════════════════════════════════════════════════════════════
 ]]
 
-print("[REN] ════════ v3.0 START ════════")
+print("[REN] ════════ v4.0 START ════════")
 
 -- ╔═══════════════════════════════════════════════════════════════════╗
 -- ║  CONFIG                                                            ║
 -- ╚═══════════════════════════════════════════════════════════════════╝
 local CONFIG = {
-    Version = "v3.0",
+    Version = "v4.0",
     FirebaseURL = "https://renrenscript-default-rtdb.asia-southeast1.firebasedatabase.app",
-    TrackCooldown = 60,
-    SessionTimeout = 180,
-    DevUsername = "demonking6666667",
+    TrackCooldown = 90,       -- detik antar heartbeat
+    SessionTimeout = 200,     -- detik sebelum session dianggap stale
+    ExecutesTTL = 7 * 86400,  -- cleanup executes > 7 hari
+    CleanupCooldown = 3600,   -- cleanup maks 1x per jam
 }
 
 local Playlist = {
@@ -78,7 +82,7 @@ local oldSong = SoundService:FindFirstChild("__REN_Music")
 if oldSong then oldSong:Destroy() end
 
 -- ╔═══════════════════════════════════════════════════════════════════╗
--- ║  HTTP HELPERS (sama seperti v11 yang work)                         ║
+-- ║  HTTP HELPERS                                                      ║
 -- ╚═══════════════════════════════════════════════════════════════════╝
 local function httpReq(url, method, body)
     local p = {
@@ -119,21 +123,33 @@ local function firebaseReq(method, path, data)
 end
 
 -- ╔═══════════════════════════════════════════════════════════════════╗
--- ║  GAME NAME CACHE                                                   ║
+-- ║  GAME NAME (MAP NAME, bukan script name)                           ║
 -- ╚═══════════════════════════════════════════════════════════════════╝
 local cachedGameName = nil
 local function getGameName()
     if cachedGameName then return cachedGameName end
-    local ok, res = pcall(function()
+
+    -- Try 1: MarketplaceService
+    local ok, info = pcall(function() return MarketplaceService:GetProductInfo(game.PlaceId) end)
+    if ok and info and info.Name and info.Name ~= "" then
+        cachedGameName = info.Name
+        print("[REN] 🎮 Map:", cachedGameName)
+        return cachedGameName
+    end
+
+    -- Try 2: games API
+    local ok2, res = pcall(function()
         return game:HttpGet("https://games.roblox.com/v1/games?universeIds=" .. tostring(game.GameId))
     end)
-    if ok and res then
-        local ok2, data = pcall(function() return HttpService:JSONDecode(res) end)
-        if ok2 and data and data.data and data.data[1] and data.data[1].name then
+    if ok2 and res then
+        local ok3, data = pcall(function() return HttpService:JSONDecode(res) end)
+        if ok3 and data and data.data and data.data[1] and data.data[1].name then
             cachedGameName = data.data[1].name
+            print("[REN] 🎮 Map (API):", cachedGameName)
             return cachedGameName
         end
     end
+
     cachedGameName = "Game #" .. tostring(game.PlaceId)
     return cachedGameName
 end
@@ -183,17 +199,17 @@ local function toast(title, msg, duration)
 end
 
 -- ╔═══════════════════════════════════════════════════════════════════╗
--- ║  SESSION + EXECUTE TRACKING (SAMA PERSIS SEPERTI v11)              ║
+-- ║  SESSION TRACKING                                                  ║
 -- ╚═══════════════════════════════════════════════════════════════════╝
 local sessionId = tostring(os.time()) .. "_" .. tostring(player.UserId)
-local lastFirebaseTime = 0
+local lastHeartbeat = 0
 
-local function pushSession(reason)
+local function pushSessionFull()
     task.spawn(function()
         pcall(function()
-            local placeId = tostring(game.PlaceId)
             local jobId = game.JobId
             if not jobId or jobId == "" then jobId = "Studio" end
+            local placeId = tostring(game.PlaceId)
 
             local data = {
                 username = player.Name,
@@ -207,15 +223,22 @@ local function pushSession(reason)
                 status = "active",
                 timestamp = os.time(),
                 sessionId = sessionId,
-                reason = reason or "auto",
             }
 
             local res = firebaseReq("PUT", "/sessions/" .. sessionId .. ".json", data)
             if res then
-                print("[REN] 📊 Session OK:", reason)
+                print("[REN] 📊 Session PUT OK")
             else
-                warn("[REN] ❌ Session failed")
+                warn("[REN] ❌ Session PUT failed")
             end
+        end)
+    end)
+end
+
+local function heartbeat()
+    task.spawn(function()
+        pcall(function()
+            firebaseReq("PUT", "/sessions/" .. sessionId .. "/timestamp.json", os.time())
         end)
     end)
 end
@@ -226,128 +249,101 @@ local function deleteSession()
     end)
 end
 
-local function trackExecute(mapName)
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  EXECUTE TRACKING (INCREMENT API)                                  ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local function trackExecute(scriptCfg)
     task.spawn(function()
         pcall(function()
+            local placeKey = tostring(game.PlaceId)
+            local gameName = getGameName()
             local key = os.time() .. "_" .. player.UserId .. "_" .. math.random(1000, 9999)
-            local data = {
-                username = player.Name,
-                userId = player.UserId,
-                placeId = tostring(game.PlaceId),
-                gameName = mapName or getGameName(),
-                timestamp = os.time(),
+
+            -- ⚡ SINGLE PATCH: execute log + increment counters
+            local payload = {
+                ["executes/" .. key] = {
+                    username = player.Name,
+                    userId = player.UserId,
+                    placeId = placeKey,
+                    gameName = gameName,
+                    scriptName = scriptCfg and scriptCfg.name or "Unknown",
+                    timestamp = os.time(),
+                },
+                ["stats/totalExecutes"] = {[".sv"] = {increment = 1}},
+                ["stats/byGame/" .. placeKey .. "/count"] = {[".sv"] = {increment = 1}},
+                ["stats/byGame/" .. placeKey .. "/name"] = gameName,
+                ["stats/updatedAt"] = os.time(),
             }
-            local res = firebaseReq("PUT", "/executes/" .. key .. ".json", data)
+
+            local res = httpReq(
+                CONFIG.FirebaseURL .. "/.json",
+                "PATCH",
+                HttpService:JSONEncode(payload)
+            )
             if res then
-                print("[REN] ✅ Execute tracked:", mapName)
+                print("[REN] ✅ Tracked | Map:", gameName, "| Script:", scriptCfg and scriptCfg.name or "?")
             else
-                warn("[REN] ❌ Execute track failed")
+                warn("[REN] ❌ Track failed")
             end
         end)
     end)
 end
 
-local function startTracking()
-    lastFirebaseTime = os.time()
-    pushSession("initial")
-
-    task.spawn(function()
-        while player and player.Parent do
-            task.wait(15)
-            if os.time() - lastFirebaseTime >= CONFIG.TrackCooldown then
-                lastFirebaseTime = os.time()
-                pushSession("heartbeat")
-            end
-        end
-    end)
-
-    player.AncestryChanged:Connect(function()
-        if not player.Parent then deleteSession() end
-    end)
-end
-
 -- ╔═══════════════════════════════════════════════════════════════════╗
--- ║  IMAGE RESOLVER                                                    ║
+-- ║  CLEANUP (max 1x per jam, global)                                  ║
 -- ╚═══════════════════════════════════════════════════════════════════╝
-local function fetchUniverseId(placeId)
-    for _, fmt in ipairs({
-        "https://apis.roblox.com/universes/v1/places/%d/universe",
-        "https://apis.roproxy.com/universes/v1/places/%d/universe",
-    }) do
-        local body = httpGet(string.format(fmt, placeId))
-        if body then
-            local ok, data = pcall(HttpService.JSONDecode, HttpService, body)
-            if ok and type(data) == "table" and tonumber(data.universeId) then
-                return tonumber(data.universeId)
-            end
-        end
-    end
-    return nil
-end
-
-local function resolveImage(cfg, placeId, setImage)
-    if cfg._imgCache and cfg._imgCache ~= "" then setImage(cfg._imgCache); return end
-    if cfg.imageUrl and cfg.imageUrl ~= "" then
-        cfg._imgCache = cfg.imageUrl; setImage(cfg._imgCache); return
-    end
+local function cleanupOld()
     task.spawn(function()
-        local uid = tonumber(cfg.universeId)
-        if not uid or uid <= 0 then
-            if placeId == game.PlaceId then
-                uid = game.GameId
-            elseif placeId then
-                uid = fetchUniverseId(placeId)
+        pcall(function()
+            -- Cek kapan terakhir cleanup (global lock)
+            local lastRaw = httpGet(CONFIG.FirebaseURL .. "/config/lastCleanup.json")
+            local last = tonumber(lastRaw) or 0
+            if os.time() - last < CONFIG.CleanupCooldown then return end
+
+            firebaseReq("PUT", "/config/lastCleanup.json", os.time())
+            print("[REN] 🧹 Running cleanup...")
+
+            -- 1. Hapus executes > 7 hari
+            local cutoff = os.time() - CONFIG.ExecutesTTL
+            local url = CONFIG.FirebaseURL .. '/executes.json?orderBy="timestamp"&endAt=' .. cutoff
+            local res = httpReq(url, "GET", nil)
+            if res and res.Body and res.Body ~= "null" then
+                local ok, data = pcall(function() return HttpService:JSONDecode(res.Body) end)
+                if ok and type(data) == "table" then
+                    local count = 0
+                    for k, _ in pairs(data) do
+                        firebaseReq("DELETE", "/executes/" .. k .. ".json")
+                        count = count + 1
+                        if count >= 200 then break end
+                    end
+                    if count > 0 then print("[REN] 🧹 Cleaned " .. count .. " old executes") end
+                end
             end
-        end
-        if uid and uid > 0 then
-            cfg._imgCache = "rbxthumb://type=GameIcon&id=" .. uid .. "&w=420&h=420"
-            setImage(cfg._imgCache); return
-        end
-        local pid = placeId or game.PlaceId
-        local ok, info = pcall(function() return MarketplaceService:GetProductInfo(pid) end)
-        if ok and info and tonumber(info.IconImageAssetId) and tonumber(info.IconImageAssetId) > 0 then
-            cfg._imgCache = "rbxassetid://" .. tostring(info.IconImageAssetId)
-            setImage(cfg._imgCache)
-        end
+
+            -- 2. Hapus sessions stale
+            local sessRes = httpReq(CONFIG.FirebaseURL .. "/sessions.json", "GET", nil)
+            if sessRes and sessRes.Body and sessRes.Body ~= "null" then
+                local ok, data = pcall(function() return HttpService:JSONDecode(sessRes.Body) end)
+                if ok and type(data) == "table" then
+                    local count = 0
+                    for k, s in pairs(data) do
+                        if type(s) == "table" and s.timestamp and (os.time() - s.timestamp) > CONFIG.SessionTimeout then
+                            firebaseReq("DELETE", "/sessions/" .. k .. ".json")
+                            count = count + 1
+                        end
+                    end
+                    if count > 0 then print("[REN] 🧹 Cleaned " .. count .. " stale sessions") end
+                end
+            end
+        end)
     end)
 end
 
 -- ╔═══════════════════════════════════════════════════════════════════╗
--- ║  SCRIPT EXECUTOR                                                   ║
--- ╚═══════════════════════════════════════════════════════════════════╝
-local function executeScript(cfg)
-    if not cfg or not cfg.scriptUrl then
-        toast("Error", "No script URL"); return false
-    end
-    print("[REN] Executing:", cfg.name)
-    local code = httpGet(cfg.scriptUrl)
-    if not code then
-        toast("Error", "Download failed"); return false
-    end
-    local fn = loadstring or load
-    if not fn then
-        toast("Error", "No loadstring"); return false
-    end
-    local compiled, err = fn(code)
-    if not compiled then
-        warn("[REN] Compile:", err)
-        toast("Error", "Compile error"); return false
-    end
-    local ok, runErr = pcall(compiled)
-    if not ok then
-        warn("[REN] Runtime:", runErr)
-        toast("Error", "Runtime error"); return false
-    end
-    trackExecute(cfg.name)  -- ⚡ TRACK SETELAH SUKSES
-    print("[REN] ✅ Script executed + tracked")
-    return true
-end
-
--- ╔═══════════════════════════════════════════════════════════════════╗
--- ║  MUSIC PLAYER (3-STATE)                                            ║
+-- ║  MUSIC (3-STATE + PLAYLIST)                                        ║
 -- ╚═══════════════════════════════════════════════════════════════════╝
 local musicSound = nil
-local musicState = 1  -- 1=Music Only, 2=Music+Game, 3=Game Only
+local musicState = 1   -- 1=Music Only, 2=Music+Game, 3=Game Only
 local currentIndex = 1
 local musicVolume = MUSIC_DEFAULT_VOLUME
 local musicPaused = false
@@ -388,9 +384,15 @@ local function applyMusicState()
     if musicState == 1 then
         setSoundsVol(true, musicSound); mutedState.value = true
         if musicSound then musicSound.Volume = musicVolume end
+        if musicSound and musicSound.SoundId ~= "" and not musicPaused and not musicSound.Playing then
+            pcall(function() musicSound:Play() end)
+        end
     elseif musicState == 2 then
         setSoundsVol(false, musicSound); mutedState.value = false
         if musicSound then musicSound.Volume = musicVolume end
+        if musicSound and musicSound.SoundId ~= "" and not musicPaused and not musicSound.Playing then
+            pcall(function() musicSound:Play() end)
+        end
     else
         setSoundsVol(false, musicSound); mutedState.value = false
         if musicSound then musicSound.Volume = 0 end
@@ -609,6 +611,85 @@ local function createMusicUI()
 end
 
 -- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  IMAGE RESOLVER                                                    ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local function fetchUniverseId(placeId)
+    for _, fmt in ipairs({
+        "https://apis.roblox.com/universes/v1/places/%d/universe",
+        "https://apis.roproxy.com/universes/v1/places/%d/universe",
+    }) do
+        local body = httpGet(string.format(fmt, placeId))
+        if body then
+            local ok, data = pcall(HttpService.JSONDecode, HttpService, body)
+            if ok and type(data) == "table" and tonumber(data.universeId) then
+                return tonumber(data.universeId)
+            end
+        end
+    end
+    return nil
+end
+
+local function resolveImage(cfg, placeId, setImage)
+    if cfg._imgCache and cfg._imgCache ~= "" then setImage(cfg._imgCache); return end
+    if cfg.imageUrl and cfg.imageUrl ~= "" then
+        cfg._imgCache = cfg.imageUrl; setImage(cfg._imgCache); return
+    end
+    task.spawn(function()
+        local uid = tonumber(cfg.universeId)
+        if not uid or uid <= 0 then
+            if placeId == game.PlaceId then
+                uid = game.GameId
+            elseif placeId then
+                uid = fetchUniverseId(placeId)
+            end
+        end
+        if uid and uid > 0 then
+            cfg._imgCache = "rbxthumb://type=GameIcon&id=" .. uid .. "&w=420&h=420"
+            setImage(cfg._imgCache); return
+        end
+        local pid = placeId or game.PlaceId
+        local ok, info = pcall(function() return MarketplaceService:GetProductInfo(pid) end)
+        if ok and info and tonumber(info.IconImageAssetId) and tonumber(info.IconImageAssetId) > 0 then
+            cfg._imgCache = "rbxassetid://" .. tostring(info.IconImageAssetId)
+            setImage(cfg._imgCache)
+        end
+    end)
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  SCRIPT EXECUTOR                                                   ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local function executeScript(cfg)
+    if not cfg or not cfg.scriptUrl then
+        toast("Error", "No script URL"); return false
+    end
+    print("[REN] Executing:", cfg.name)
+
+    local code = httpGet(cfg.scriptUrl)
+    if not code then
+        toast("Error", "Download failed"); return false
+    end
+    local fn = loadstring or load
+    if not fn then
+        toast("Error", "No loadstring"); return false
+    end
+    local compiled, err = fn(code)
+    if not compiled then
+        warn("[REN] Compile:", err)
+        toast("Error", "Compile error"); return false
+    end
+    local ok, runErr = pcall(compiled)
+    if not ok then
+        warn("[REN] Runtime:", runErr)
+        toast("Error", "Runtime error"); return false
+    end
+
+    trackExecute(cfg)  -- ⚡ Track setelah sukses
+    print("[REN] ✅ Script executed + tracked")
+    return true
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
 -- ║  MANUAL BROWSER                                                    ║
 -- ╚═══════════════════════════════════════════════════════════════════╝
 local function showBrowser()
@@ -747,9 +828,25 @@ initMusic()
 createMusicUI()
 print("[REN] Music ready")
 
-startTracking()
-print("[REN] Tracking ready")
+-- Session
+pushSessionFull()
+cleanupOld()
 
+task.spawn(function()
+    while player and player.Parent do
+        task.wait(30)
+        if os.time() - lastHeartbeat >= CONFIG.TrackCooldown then
+            lastHeartbeat = os.time()
+            heartbeat()
+        end
+    end
+end)
+
+player.AncestryChanged:Connect(function()
+    if not player.Parent then deleteSession() end
+end)
+
+-- Auto-execute / auto-browse
 local detectedMap = Maps[game.PlaceId]
 
 task.spawn(function()
@@ -773,4 +870,4 @@ task.spawn(function()
     end
 end)
 
-print("[REN] ════════ READY v3.0 ════════")
+print("[REN] ════════ READY v4.0 ════════")
