@@ -1,1 +1,776 @@
-hi
+--[[
+  ═══════════════════════════════════════════════════════════════════
+  RENRENHUB v3.0 — FINAL (auto-exec, no key, working tracking)
+  ═══════════════════════════════════════════════════════════════════
+  • No key system — langsung load
+  • Auto-execute if map matches
+  • Auto-browse if map doesn't match
+  • Tracking ke /sessions/ + /executes/ (SAMA seperti v11 yang work)
+  • Music 3-state toggle
+  • Image resolver async untuk browser
+  ═══════════════════════════════════════════════════════════════════
+]]
+
+print("[REN] ════════ v3.0 START ════════")
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  CONFIG                                                            ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local CONFIG = {
+    Version = "v3.0",
+    FirebaseURL = "https://renrenscript-default-rtdb.asia-southeast1.firebasedatabase.app",
+    TrackCooldown = 60,
+    SessionTimeout = 180,
+    DevUsername = "demonking6666667",
+}
+
+local Playlist = {
+    { name = "Low Cortisol",  id = "rbxassetid://110919391228823" },
+    { name = "bazooka",       id = "rbxassetid://121252909004354" },
+    { name = "TerraAway",     id = "rbxassetid://82746224492420" },
+    { name = "Your Old Life", id = "rbxassetid://91785810573969" },
+}
+local MUSIC_DEFAULT_VOLUME = 0.5
+
+local Maps = {
+    [8735521924] = {
+        id = "centaura", name = "Centaura",
+        scriptUrl = "https://pastebin.com/raw/Q8A17jSq",
+        description = "Auto-win Centaura",
+        imageUrl = "",
+    },
+    [113273588963037] = {
+        id = "oneup", name = "+1 Upgrade Per Kill",
+        scriptUrl = "https://pastebin.com/raw/Vd2ZYevk",
+        description = "Best script for 1UP Kill",
+        imageUrl = "",
+    },
+}
+
+local UniversalScripts = {
+    {
+        id = "universal_1", name = "Universal Script",
+        scriptUrl = "https://pastebin.com/raw/Vd2ZYevk",
+        description = "Works on any map (fallback)",
+        imageUrl = "",
+    },
+}
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  SERVICES                                                          ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local Players = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
+local SoundService = game:GetService("SoundService")
+local TweenService = game:GetService("TweenService")
+local UIS = game:GetService("UserInputService")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+local player = Players.LocalPlayer
+if not player then return end
+local pg = player:FindFirstChild("PlayerGui") or player:WaitForChild("PlayerGui", 10)
+if not pg then return end
+
+for _, n in ipairs({"REN_MusicUI", "REN_Browser", "REN_Toast"}) do
+    local o = pg:FindFirstChild(n); if o then o:Destroy() end
+end
+local oldSong = SoundService:FindFirstChild("__REN_Music")
+if oldSong then oldSong:Destroy() end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  HTTP HELPERS (sama seperti v11 yang work)                         ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local function httpReq(url, method, body)
+    local p = {
+        Url = url, Method = method,
+        Headers = {["Content-Type"] = "application/json"},
+        Body = body,
+    }
+    local ok, r = pcall(function() return syn.request(p) end)
+    if ok and r then return r end
+    ok, r = pcall(function() return http_request(p) end)
+    if ok and r then return r end
+    ok, r = pcall(function() return request(p) end)
+    if ok and r then return r end
+    return nil
+end
+
+local function httpGet(url)
+    local ok, r = pcall(function() return game:HttpGet(url, true) end)
+    if ok and r and r ~= "" then return r end
+    if syn and syn.request then
+        local x = pcall(function() return syn.request({Url=url, Method="GET"}) end)
+        if x and x.Body then return x.Body end
+    end
+    if http_request then
+        local x = pcall(function() return http_request({Url=url, Method="GET"}) end)
+        if x and x.Body then return x.Body end
+    end
+    if request then
+        local x = pcall(function() return request({Url=url, Method="GET"}) end)
+        if x and x.Body then return x.Body end
+    end
+    return nil
+end
+
+local function firebaseReq(method, path, data)
+    local body = data and HttpService:JSONEncode(data) or nil
+    return httpReq(CONFIG.FirebaseURL .. path, method, body)
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  GAME NAME CACHE                                                   ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local cachedGameName = nil
+local function getGameName()
+    if cachedGameName then return cachedGameName end
+    local ok, res = pcall(function()
+        return game:HttpGet("https://games.roblox.com/v1/games?universeIds=" .. tostring(game.GameId))
+    end)
+    if ok and res then
+        local ok2, data = pcall(function() return HttpService:JSONDecode(res) end)
+        if ok2 and data and data.data and data.data[1] and data.data[1].name then
+            cachedGameName = data.data[1].name
+            return cachedGameName
+        end
+    end
+    cachedGameName = "Game #" .. tostring(game.PlaceId)
+    return cachedGameName
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  TOAST                                                             ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local function toast(title, msg, duration)
+    local gui = pg:FindFirstChild("REN_Toast")
+    if not gui then
+        gui = Instance.new("ScreenGui")
+        gui.Name = "REN_Toast"; gui.ResetOnSpawn = false
+        gui.DisplayOrder = 999; gui.Parent = pg
+    end
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(0, 340, 0, 72)
+    frame.AnchorPoint = Vector2.new(0.5, 0)
+    frame.Position = UDim2.new(0.5, 0, 0, -90)
+    frame.BackgroundColor3 = Color3.fromRGB(22, 26, 40)
+    frame.BorderSizePixel = 0; frame.Parent = gui
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 12)
+    local s = Instance.new("UIStroke", frame)
+    s.Color = Color3.fromRGB(0, 220, 160); s.Thickness = 2
+    local t = Instance.new("TextLabel", frame)
+    t.Size = UDim2.new(1, -24, 0, 22); t.Position = UDim2.new(0, 12, 0, 8)
+    t.BackgroundTransparency = 1; t.Text = title
+    t.TextColor3 = Color3.fromRGB(0, 220, 160)
+    t.Font = Enum.Font.GothamBold; t.TextSize = 14
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    local m = Instance.new("TextLabel", frame)
+    m.Size = UDim2.new(1, -24, 0, 34); m.Position = UDim2.new(0, 12, 0, 30)
+    m.BackgroundTransparency = 1; m.Text = msg
+    m.TextColor3 = Color3.fromRGB(220, 220, 235)
+    m.Font = Enum.Font.Gotham; m.TextSize = 12
+    m.TextXAlignment = Enum.TextXAlignment.Left
+    m.TextWrapped = true
+    TweenService:Create(frame, TweenInfo.new(0.4, Enum.EasingStyle.Back), {
+        Position = UDim2.new(0.5, 0, 0, 20)
+    }):Play()
+    task.delay(duration or 3, function()
+        if not frame.Parent then return end
+        TweenService:Create(frame, TweenInfo.new(0.3), {
+            Position = UDim2.new(0.5, 0, 0, -90)
+        }):Play()
+        task.delay(0.4, function() if frame.Parent then frame:Destroy() end end)
+    end)
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  SESSION + EXECUTE TRACKING (SAMA PERSIS SEPERTI v11)              ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local sessionId = tostring(os.time()) .. "_" .. tostring(player.UserId)
+local lastFirebaseTime = 0
+
+local function pushSession(reason)
+    task.spawn(function()
+        pcall(function()
+            local placeId = tostring(game.PlaceId)
+            local jobId = game.JobId
+            if not jobId or jobId == "" then jobId = "Studio" end
+
+            local data = {
+                username = player.Name,
+                userId = player.UserId,
+                placeId = placeId,
+                jobId = jobId,
+                gameName = getGameName(),
+                joinUrl = "https://www.roblox.com/games/start?placeId=" .. placeId .. "&gameInstanceId=" .. jobId,
+                profileUrl = "https://www.roblox.com/users/" .. player.UserId .. "/profile",
+                executor = (identifyexecutor and identifyexecutor()) or "Unknown",
+                status = "active",
+                timestamp = os.time(),
+                sessionId = sessionId,
+                reason = reason or "auto",
+            }
+
+            local res = firebaseReq("PUT", "/sessions/" .. sessionId .. ".json", data)
+            if res then
+                print("[REN] 📊 Session OK:", reason)
+            else
+                warn("[REN] ❌ Session failed")
+            end
+        end)
+    end)
+end
+
+local function deleteSession()
+    pcall(function()
+        firebaseReq("DELETE", "/sessions/" .. sessionId .. ".json")
+    end)
+end
+
+local function trackExecute(mapName)
+    task.spawn(function()
+        pcall(function()
+            local key = os.time() .. "_" .. player.UserId .. "_" .. math.random(1000, 9999)
+            local data = {
+                username = player.Name,
+                userId = player.UserId,
+                placeId = tostring(game.PlaceId),
+                gameName = mapName or getGameName(),
+                timestamp = os.time(),
+            }
+            local res = firebaseReq("PUT", "/executes/" .. key .. ".json", data)
+            if res then
+                print("[REN] ✅ Execute tracked:", mapName)
+            else
+                warn("[REN] ❌ Execute track failed")
+            end
+        end)
+    end)
+end
+
+local function startTracking()
+    lastFirebaseTime = os.time()
+    pushSession("initial")
+
+    task.spawn(function()
+        while player and player.Parent do
+            task.wait(15)
+            if os.time() - lastFirebaseTime >= CONFIG.TrackCooldown then
+                lastFirebaseTime = os.time()
+                pushSession("heartbeat")
+            end
+        end
+    end)
+
+    player.AncestryChanged:Connect(function()
+        if not player.Parent then deleteSession() end
+    end)
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  IMAGE RESOLVER                                                    ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local function fetchUniverseId(placeId)
+    for _, fmt in ipairs({
+        "https://apis.roblox.com/universes/v1/places/%d/universe",
+        "https://apis.roproxy.com/universes/v1/places/%d/universe",
+    }) do
+        local body = httpGet(string.format(fmt, placeId))
+        if body then
+            local ok, data = pcall(HttpService.JSONDecode, HttpService, body)
+            if ok and type(data) == "table" and tonumber(data.universeId) then
+                return tonumber(data.universeId)
+            end
+        end
+    end
+    return nil
+end
+
+local function resolveImage(cfg, placeId, setImage)
+    if cfg._imgCache and cfg._imgCache ~= "" then setImage(cfg._imgCache); return end
+    if cfg.imageUrl and cfg.imageUrl ~= "" then
+        cfg._imgCache = cfg.imageUrl; setImage(cfg._imgCache); return
+    end
+    task.spawn(function()
+        local uid = tonumber(cfg.universeId)
+        if not uid or uid <= 0 then
+            if placeId == game.PlaceId then
+                uid = game.GameId
+            elseif placeId then
+                uid = fetchUniverseId(placeId)
+            end
+        end
+        if uid and uid > 0 then
+            cfg._imgCache = "rbxthumb://type=GameIcon&id=" .. uid .. "&w=420&h=420"
+            setImage(cfg._imgCache); return
+        end
+        local pid = placeId or game.PlaceId
+        local ok, info = pcall(function() return MarketplaceService:GetProductInfo(pid) end)
+        if ok and info and tonumber(info.IconImageAssetId) and tonumber(info.IconImageAssetId) > 0 then
+            cfg._imgCache = "rbxassetid://" .. tostring(info.IconImageAssetId)
+            setImage(cfg._imgCache)
+        end
+    end)
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  SCRIPT EXECUTOR                                                   ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local function executeScript(cfg)
+    if not cfg or not cfg.scriptUrl then
+        toast("Error", "No script URL"); return false
+    end
+    print("[REN] Executing:", cfg.name)
+    local code = httpGet(cfg.scriptUrl)
+    if not code then
+        toast("Error", "Download failed"); return false
+    end
+    local fn = loadstring or load
+    if not fn then
+        toast("Error", "No loadstring"); return false
+    end
+    local compiled, err = fn(code)
+    if not compiled then
+        warn("[REN] Compile:", err)
+        toast("Error", "Compile error"); return false
+    end
+    local ok, runErr = pcall(compiled)
+    if not ok then
+        warn("[REN] Runtime:", runErr)
+        toast("Error", "Runtime error"); return false
+    end
+    trackExecute(cfg.name)  -- ⚡ TRACK SETELAH SUKSES
+    print("[REN] ✅ Script executed + tracked")
+    return true
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  MUSIC PLAYER (3-STATE)                                            ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local musicSound = nil
+local musicState = 1  -- 1=Music Only, 2=Music+Game, 3=Game Only
+local currentIndex = 1
+local musicVolume = MUSIC_DEFAULT_VOLUME
+local musicPaused = false
+local savedVols = {}
+local mutedState = {value = true}
+
+local function saveGameSounds(except)
+    savedVols = {}
+    for _, root in ipairs({SoundService, workspace, game:GetService("Lighting")}) do
+        if root then
+            pcall(function()
+                for _, s in ipairs(root:GetDescendants()) do
+                    if s:IsA("Sound") and s ~= except and s.Name ~= "__REN_Music" then
+                        savedVols[s] = s.Volume
+                    end
+                end
+            end)
+        end
+    end
+end
+
+local function setSoundsVol(mute, except)
+    for s, v in pairs(savedVols) do
+        if s ~= except and s and s.Parent then
+            pcall(function() s.Volume = mute and 0 or v end)
+        end
+    end
+end
+
+local function tryWatch(o)
+    if o:IsA("Sound") and o ~= musicSound and o.Name ~= "__REN_Music" and not savedVols[o] then
+        savedVols[o] = o.Volume
+        if mutedState.value then pcall(function() o.Volume = 0 end) end
+    end
+end
+
+local function applyMusicState()
+    if musicState == 1 then
+        setSoundsVol(true, musicSound); mutedState.value = true
+        if musicSound then musicSound.Volume = musicVolume end
+    elseif musicState == 2 then
+        setSoundsVol(false, musicSound); mutedState.value = false
+        if musicSound then musicSound.Volume = musicVolume end
+    else
+        setSoundsVol(false, musicSound); mutedState.value = false
+        if musicSound then musicSound.Volume = 0 end
+    end
+end
+
+local function getModeText()
+    if musicState == 1 then return "🎵 Music Only"
+    elseif musicState == 2 then return "🎵🔊 Music + Game"
+    else return "🔊 Game Only" end
+end
+
+local function getModeColor()
+    if musicState == 1 then return Color3.fromRGB(40, 42, 55)
+    elseif musicState == 2 then return Color3.fromRGB(60, 90, 60)
+    else return Color3.fromRGB(90, 60, 60) end
+end
+
+local function playSongAt(idx)
+    if not musicSound or not musicSound.Parent then return end
+    currentIndex = ((idx - 1) % #Playlist) + 1
+    local entry = Playlist[currentIndex]
+    musicPaused = false
+    pcall(function() musicSound:Stop() end)
+    musicSound.SoundId = entry.id
+    musicSound.Volume = (musicState == 3) and 0 or musicVolume
+    task.spawn(function()
+        task.wait(0.15)
+        pcall(function() musicSound:Play() end)
+    end)
+end
+
+local function initMusic()
+    if musicSound then musicSound:Destroy() end
+    musicSound = Instance.new("Sound")
+    musicSound.Name = "__REN_Music"
+    musicSound.Volume = musicVolume
+    musicSound.Looped = false
+    musicSound.Parent = SoundService
+
+    musicSound.Ended:Connect(function()
+        if not musicPaused then playSongAt(currentIndex + 1) end
+    end)
+
+    saveGameSounds(musicSound)
+    applyMusicState()
+
+    SoundService.DescendantAdded:Connect(tryWatch)
+    workspace.DescendantAdded:Connect(tryWatch)
+
+    playSongAt(1)
+end
+
+local function createMusicUI()
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "REN_MusicUI"; gui.ResetOnSpawn = false
+    gui.DisplayOrder = 250; gui.Parent = pg
+
+    local icon = Instance.new("TextButton", gui)
+    icon.Size = UDim2.new(0, 54, 0, 54)
+    icon.Position = UDim2.new(0, 16, 0.5, -27)
+    icon.BackgroundColor3 = Color3.fromRGB(22, 26, 40)
+    icon.Text = "🎵"; icon.TextSize = 24
+    icon.BorderSizePixel = 0; icon.AutoButtonColor = false
+    Instance.new("UICorner", icon).CornerRadius = UDim.new(1, 0)
+    local is = Instance.new("UIStroke", icon)
+    is.Color = Color3.fromRGB(0, 220, 160); is.Thickness = 2
+
+    local panel = Instance.new("Frame", gui)
+    panel.Size = UDim2.new(0, 290, 0, 145)
+    panel.Position = UDim2.new(0, 16, 0.5, -72)
+    panel.BackgroundColor3 = Color3.fromRGB(20, 24, 38)
+    panel.BorderSizePixel = 0; panel.Visible = false
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 14)
+    local ps = Instance.new("UIStroke", panel)
+    ps.Color = Color3.fromRGB(0, 220, 160); ps.Thickness = 2
+
+    local header = Instance.new("Frame", panel)
+    header.Size = UDim2.new(1, 0, 0, 32)
+    header.BackgroundTransparency = 1; header.Active = true
+
+    local hTitle = Instance.new("TextLabel", header)
+    hTitle.Size = UDim2.new(1, -70, 1, 0); hTitle.Position = UDim2.new(0, 12, 0, 0)
+    hTitle.BackgroundTransparency = 1; hTitle.Text = "🎵 Music Player"
+    hTitle.TextColor3 = Color3.fromRGB(0, 220, 160)
+    hTitle.Font = Enum.Font.GothamBold; hTitle.TextSize = 12
+    hTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+    local colBtn = Instance.new("TextButton", header)
+    colBtn.Size = UDim2.new(0, 24, 0, 22); colBtn.Position = UDim2.new(1, -56, 0, 5)
+    colBtn.BackgroundColor3 = Color3.fromRGB(50, 56, 76)
+    colBtn.Text = "−"; colBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
+    colBtn.Font = Enum.Font.GothamBold; colBtn.TextSize = 14; colBtn.BorderSizePixel = 0
+    Instance.new("UICorner", colBtn).CornerRadius = UDim.new(0, 4)
+
+    local xBtn = Instance.new("TextButton", header)
+    xBtn.Size = UDim2.new(0, 24, 0, 22); xBtn.Position = UDim2.new(1, -28, 0, 5)
+    xBtn.BackgroundColor3 = Color3.fromRGB(200, 55, 55)
+    xBtn.Text = "×"; xBtn.TextColor3 = Color3.new(1, 1, 1)
+    xBtn.Font = Enum.Font.GothamBold; xBtn.TextSize = 14; xBtn.BorderSizePixel = 0
+    Instance.new("UICorner", xBtn).CornerRadius = UDim.new(0, 4)
+
+    local songLbl = Instance.new("TextLabel", panel)
+    songLbl.Size = UDim2.new(1, -24, 0, 22); songLbl.Position = UDim2.new(0, 12, 0, 34)
+    songLbl.BackgroundTransparency = 1; songLbl.Text = Playlist[1].name
+    songLbl.TextColor3 = Color3.fromRGB(240, 240, 250)
+    songLbl.Font = Enum.Font.GothamBold; songLbl.TextSize = 13
+    songLbl.TextXAlignment = Enum.TextXAlignment.Left
+    songLbl.TextTruncate = Enum.TextTruncate.AtEnd
+
+    local prevBtn = Instance.new("TextButton", panel)
+    prevBtn.Size = UDim2.new(0, 44, 0, 44); prevBtn.Position = UDim2.new(0, 12, 0, 60)
+    prevBtn.BackgroundColor3 = Color3.fromRGB(40, 46, 66)
+    prevBtn.Text = "⏮"; prevBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
+    prevBtn.TextSize = 22; prevBtn.BorderSizePixel = 0
+    Instance.new("UICorner", prevBtn).CornerRadius = UDim.new(0, 10)
+
+    local playBtn = Instance.new("TextButton", panel)
+    playBtn.Size = UDim2.new(0, 64, 0, 44); playBtn.Position = UDim2.new(0, 62, 0, 60)
+    playBtn.BackgroundColor3 = Color3.fromRGB(0, 200, 140)
+    playBtn.Text = "⏸"; playBtn.TextColor3 = Color3.new(1, 1, 1)
+    playBtn.TextSize = 22; playBtn.BorderSizePixel = 0
+    Instance.new("UICorner", playBtn).CornerRadius = UDim.new(0, 10)
+
+    local nextBtn = Instance.new("TextButton", panel)
+    nextBtn.Size = UDim2.new(0, 44, 0, 44); nextBtn.Position = UDim2.new(0, 132, 0, 60)
+    nextBtn.BackgroundColor3 = Color3.fromRGB(40, 46, 66)
+    nextBtn.Text = "⏭"; nextBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
+    nextBtn.TextSize = 22; nextBtn.BorderSizePixel = 0
+    Instance.new("UICorner", nextBtn).CornerRadius = UDim.new(0, 10)
+
+    local modeBtn = Instance.new("TextButton", panel)
+    modeBtn.Size = UDim2.new(0, 140, 0, 26); modeBtn.Position = UDim2.new(0, 12, 1, -34)
+    modeBtn.BackgroundColor3 = getModeColor()
+    modeBtn.Text = getModeText()
+    modeBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
+    modeBtn.Font = Enum.Font.Gotham; modeBtn.TextSize = 11; modeBtn.BorderSizePixel = 0
+    Instance.new("UICorner", modeBtn).CornerRadius = UDim.new(0, 6)
+
+    local volBtn = Instance.new("TextButton", panel)
+    volBtn.Size = UDim2.new(0, 110, 0, 26); volBtn.Position = UDim2.new(1, -122, 1, -34)
+    volBtn.BackgroundColor3 = Color3.fromRGB(40, 46, 66)
+    volBtn.Text = "🔊 " .. math.floor(musicVolume * 100) .. "%"
+    volBtn.TextColor3 = Color3.fromRGB(220, 220, 240)
+    volBtn.Font = Enum.Font.Gotham; volBtn.TextSize = 11; volBtn.BorderSizePixel = 0
+    Instance.new("UICorner", volBtn).CornerRadius = UDim.new(0, 6)
+
+    local function updateUI()
+        songLbl.Text = Playlist[currentIndex] and Playlist[currentIndex].name or "-"
+        playBtn.Text = musicPaused and "▶" or "⏸"
+        playBtn.BackgroundColor3 = musicPaused and Color3.fromRGB(200, 150, 50) or Color3.fromRGB(0, 200, 140)
+        modeBtn.Text = getModeText()
+        modeBtn.BackgroundColor3 = getModeColor()
+        volBtn.Text = "🔊 " .. math.floor(musicVolume * 100) .. "%"
+    end
+
+    icon.MouseButton1Click:Connect(function() icon.Visible = false; panel.Visible = true; updateUI() end)
+    colBtn.MouseButton1Click:Connect(function() panel.Visible = false; icon.Visible = true end)
+    xBtn.MouseButton1Click:Connect(function() if musicSound then musicSound:Destroy() end; gui:Destroy() end)
+    prevBtn.MouseButton1Click:Connect(function() playSongAt(currentIndex - 1); task.wait(0.1); updateUI() end)
+    playBtn.MouseButton1Click:Connect(function()
+        if musicPaused then
+            musicPaused = false
+            pcall(function() musicSound:Resume() end)
+        else
+            musicPaused = true
+            pcall(function() musicSound:Pause() end)
+        end
+        updateUI()
+    end)
+    nextBtn.MouseButton1Click:Connect(function() playSongAt(currentIndex + 1); task.wait(0.1); updateUI() end)
+    modeBtn.MouseButton1Click:Connect(function()
+        musicState = (musicState % 3) + 1
+        applyMusicState()
+        if musicSound and musicSound.SoundId ~= "" then
+            if musicState == 3 then
+                musicSound.Volume = 0
+            else
+                musicSound.Volume = musicVolume
+                if not musicPaused and not musicSound.Playing then
+                    pcall(function() musicSound:Play() end)
+                end
+            end
+        end
+        updateUI()
+    end)
+    volBtn.MouseButton1Click:Connect(function()
+        musicVolume = musicVolume + 0.1
+        if musicVolume > 1.05 then musicVolume = 0 end
+        musicVolume = math.clamp(musicVolume, 0, 1)
+        if musicSound and musicState ~= 3 then musicSound.Volume = musicVolume end
+        updateUI()
+    end)
+
+    local dragging, dragStart, startPos
+    header.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true; dragStart = input.Position; startPos = panel.Position
+        end
+    end)
+    header.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - dragStart
+            panel.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end)
+
+    task.spawn(function()
+        while gui.Parent do task.wait(0.5); updateUI() end
+    end)
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  MANUAL BROWSER                                                    ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+local function showBrowser()
+    local old = pg:FindFirstChild("REN_Browser"); if old then old:Destroy() end
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "REN_Browser"; gui.ResetOnSpawn = false
+    gui.DisplayOrder = 500; gui.Parent = pg
+
+    local bd = Instance.new("Frame", gui)
+    bd.Size = UDim2.new(1, 0, 1, 0)
+    bd.BackgroundColor3 = Color3.new(0, 0, 0)
+    bd.BackgroundTransparency = 0.5; bd.BorderSizePixel = 0; bd.Active = true
+
+    local panel = Instance.new("Frame", gui)
+    panel.Size = UDim2.new(0, 720, 0, 400)
+    panel.AnchorPoint = Vector2.new(0.5, 0.5)
+    panel.Position = UDim2.new(0.5, 0, 0.5, 0)
+    panel.BackgroundColor3 = Color3.fromRGB(20, 24, 38)
+    panel.BorderSizePixel = 0; panel.Active = true
+    Instance.new("UICorner", panel).CornerRadius = UDim.new(0, 16)
+    local pStroke = Instance.new("UIStroke", panel)
+    pStroke.Color = Color3.fromRGB(0, 220, 160); pStroke.Thickness = 2
+
+    local tb = Instance.new("Frame", panel)
+    tb.Size = UDim2.new(1, 0, 0, 52)
+    tb.BackgroundColor3 = Color3.fromRGB(28, 32, 48); tb.BorderSizePixel = 0
+    Instance.new("UICorner", tb).CornerRadius = UDim.new(0, 16)
+
+    local title = Instance.new("TextLabel", tb)
+    title.Size = UDim2.new(1, -70, 1, 0); title.Position = UDim2.new(0, 20, 0, 0)
+    title.BackgroundTransparency = 1; title.Text = "Select Script"
+    title.TextColor3 = Color3.fromRGB(0, 220, 160)
+    title.Font = Enum.Font.GothamBold; title.TextSize = 18
+    title.TextXAlignment = Enum.TextXAlignment.Left
+
+    local hint = Instance.new("TextLabel", tb)
+    hint.Size = UDim2.new(1, -70, 0, 14); hint.Position = UDim2.new(0, 20, 0, 30)
+    hint.BackgroundTransparency = 1; hint.Text = "← Swipe cards →"
+    hint.TextColor3 = Color3.fromRGB(140, 150, 170)
+    hint.Font = Enum.Font.Gotham; hint.TextSize = 10
+    hint.TextXAlignment = Enum.TextXAlignment.Left
+
+    local xBtn = Instance.new("TextButton", tb)
+    xBtn.Size = UDim2.new(0, 36, 0, 36); xBtn.Position = UDim2.new(1, -46, 0, 8)
+    xBtn.BackgroundColor3 = Color3.fromRGB(200, 55, 55)
+    xBtn.Text = "×"; xBtn.TextColor3 = Color3.new(1, 1, 1)
+    xBtn.Font = Enum.Font.GothamBold; xBtn.TextSize = 22; xBtn.BorderSizePixel = 0
+    Instance.new("UICorner", xBtn).CornerRadius = UDim.new(0, 8)
+    xBtn.MouseButton1Click:Connect(function() gui:Destroy() end)
+
+    local scroll = Instance.new("ScrollingFrame", panel)
+    scroll.Size = UDim2.new(1, -40, 1, -100)
+    scroll.Position = UDim2.new(0, 20, 0, 72)
+    scroll.BackgroundTransparency = 1; scroll.BorderSizePixel = 0
+    scroll.ScrollBarThickness = 6
+    scroll.ScrollBarImageColor3 = Color3.fromRGB(0, 220, 160)
+    scroll.ScrollingDirection = Enum.ScrollingDirection.X
+    scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    scroll.AutomaticCanvasSize = Enum.AutomaticSize.X
+
+    local layout = Instance.new("UIListLayout", scroll)
+    layout.FillDirection = Enum.FillDirection.Horizontal
+    layout.Padding = UDim.new(0, 14)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+    local all = {}
+    for placeId, cfg in pairs(Maps) do table.insert(all, {cfg = cfg, placeId = placeId}) end
+    for _, cfg in ipairs(UniversalScripts) do table.insert(all, {cfg = cfg, placeId = nil}) end
+
+    for i, entry in ipairs(all) do
+        local card = Instance.new("Frame", scroll)
+        card.Size = UDim2.new(0, 195, 1, -12)
+        card.BackgroundColor3 = Color3.fromRGB(28, 33, 50)
+        card.BorderSizePixel = 0; card.LayoutOrder = i
+        Instance.new("UICorner", card).CornerRadius = UDim.new(0, 12)
+
+        local imgBox = Instance.new("Frame", card)
+        imgBox.Size = UDim2.new(1, -16, 0, 115)
+        imgBox.Position = UDim2.new(0, 8, 0, 8)
+        imgBox.BackgroundColor3 = Color3.fromRGB(40, 46, 66)
+        imgBox.BorderSizePixel = 0; imgBox.ClipsDescendants = true
+        Instance.new("UICorner", imgBox).CornerRadius = UDim.new(0, 10)
+
+        local ph = Instance.new("TextLabel", imgBox)
+        ph.Size = UDim2.new(1, 0, 1, 0); ph.BackgroundTransparency = 1
+        ph.Text = string.upper(string.sub(entry.cfg.name or "?", 1, 2))
+        ph.TextColor3 = Color3.fromRGB(90, 110, 150)
+        ph.Font = Enum.Font.GothamBold; ph.TextSize = 36
+
+        local img = Instance.new("ImageLabel", imgBox)
+        img.Size = UDim2.new(1, 0, 1, 0); img.BackgroundTransparency = 1
+        img.Image = ""; img.ScaleType = Enum.ScaleType.Crop; img.ZIndex = 2
+        Instance.new("UICorner", img).CornerRadius = UDim.new(0, 10)
+
+        resolveImage(entry.cfg, entry.placeId, function(url)
+            if img.Parent then img.Image = url; ph.Visible = false end
+        end)
+
+        local nm = Instance.new("TextLabel", card)
+        nm.Size = UDim2.new(1, -16, 0, 20); nm.Position = UDim2.new(0, 8, 0, 132)
+        nm.BackgroundTransparency = 1; nm.Text = entry.cfg.name or "Unknown"
+        nm.TextColor3 = Color3.fromRGB(240, 240, 250)
+        nm.Font = Enum.Font.GothamBold; nm.TextSize = 14
+        nm.TextXAlignment = Enum.TextXAlignment.Left
+        nm.TextTruncate = Enum.TextTruncate.AtEnd
+
+        local ds = Instance.new("TextLabel", card)
+        ds.Size = UDim2.new(1, -16, 0, 32); ds.Position = UDim2.new(0, 8, 0, 154)
+        ds.BackgroundTransparency = 1; ds.Text = entry.cfg.description or ""
+        ds.TextColor3 = Color3.fromRGB(150, 160, 180)
+        ds.Font = Enum.Font.Gotham; ds.TextSize = 11
+        ds.TextXAlignment = Enum.TextXAlignment.Left
+        ds.TextYAlignment = Enum.TextYAlignment.Top
+        ds.TextWrapped = true
+
+        local ex = Instance.new("TextButton", card)
+        ex.Size = UDim2.new(1, -16, 0, 36); ex.Position = UDim2.new(0, 8, 1, -44)
+        ex.BackgroundColor3 = Color3.fromRGB(0, 200, 140)
+        ex.Text = "▶ Execute"; ex.TextColor3 = Color3.new(1, 1, 1)
+        ex.Font = Enum.Font.GothamBold; ex.TextSize = 13; ex.BorderSizePixel = 0
+        Instance.new("UICorner", ex).CornerRadius = UDim.new(0, 8)
+
+        ex.MouseButton1Click:Connect(function()
+            gui:Destroy()
+            task.wait(0.2)
+            local ok = executeScript(entry.cfg)
+            if ok then toast("Success", entry.cfg.name .. " loaded!") end
+        end)
+    end
+end
+
+-- ╔═══════════════════════════════════════════════════════════════════╗
+-- ║  BOOT                                                              ║
+-- ╚═══════════════════════════════════════════════════════════════════╝
+initMusic()
+createMusicUI()
+print("[REN] Music ready")
+
+startTracking()
+print("[REN] Tracking ready")
+
+local detectedMap = Maps[game.PlaceId]
+
+task.spawn(function()
+    task.wait(1)
+    if detectedMap then
+        print("[REN] Auto-exec:", detectedMap.name)
+        toast("Loading", detectedMap.name)
+        task.wait(0.3)
+        local ok = executeScript(detectedMap)
+        if ok then
+            toast("Success", detectedMap.name .. " loaded!")
+        else
+            task.wait(0.5)
+            showBrowser()
+        end
+    else
+        print("[REN] Map not supported → auto-browse")
+        toast("Map Not Supported", "Opening browser...")
+        task.wait(0.5)
+        showBrowser()
+    end
+end)
+
+print("[REN] ════════ READY v3.0 ════════")
